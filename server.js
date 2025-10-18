@@ -67,6 +67,28 @@ const Cotacao = mongoose.model('Cotacao', cotacaoSchema);
 // ROTAS PÚBLICAS
 // ==========================================
 
+// Rota raiz - Documentação da API
+app.get('/', (req, res) => {
+    res.json({
+        message: '🚀 API de Cotações de Frete',
+        version: '1.0.0',
+        status: 'online',
+        endpoints: {
+            health: 'GET /health',
+            cotacoes: {
+                listar: 'GET /api/cotacoes',
+                criar: 'POST /api/cotacoes',
+                buscar: 'GET /api/cotacoes/:id',
+                atualizar: 'PUT /api/cotacoes/:id',
+                deletar: 'DELETE /api/cotacoes/:id'
+            }
+        },
+        authentication: 'Bearer Token required for /api/* routes',
+        database: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
+        timestamp: new Date().toISOString()
+    });
+});
+
 // Health check
 app.get('/health', (req, res) => {
     const status = mongoose.connection.readyState === 1 ? 'healthy' : 'unhealthy';
