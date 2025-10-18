@@ -1,10 +1,23 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
-const mongoose = require('mongoose');
+const { createClient } = require('@supabase/supabase-js');
 const { verificarAutenticacao } = require('./middleware/auth');
 
 const app = express();
+
+// ==========================================
+// CONFIGURAÇÃO DO SUPABASE
+// ==========================================
+const supabaseUrl = process.env.SUPABASE_URL;
+const supabaseKey = process.env.SUPABASE_KEY;
+
+if (!supabaseUrl || !supabaseKey) {
+    console.error('❌ ERRO: SUPABASE_URL ou SUPABASE_KEY não configurados no .env');
+    process.exit(1);
+}
+
+const supabase = createClient(supabaseUrl, supabaseKey);
 
 // ==========================================
 // MIDDLEWARES
@@ -17,53 +30,6 @@ app.use(cors({
 app.use(express.json());
 
 // ==========================================
-// CONEXÃO COM MONGODB
-// ==========================================
-const MONGODB_URI = process.env.MONGODB_URI;
-
-if (!MONGODB_URI) {
-    console.error('❌ ERRO: MONGODB_URI não configurado no .env');
-    process.exit(1);
-}
-
-mongoose.connect(MONGODB_URI, {
-    useNewUrlParser: true,
-    useUnifiedTopology: true,
-})
-.then(() => console.log('✅ Conectado ao MongoDB Atlas'))
-.catch(err => {
-    console.error('❌ Erro ao conectar MongoDB:', err);
-    process.exit(1);
-});
-
-// ==========================================
-// MODELO DE DADOS
-// ==========================================
-const cotacaoSchema = new mongoose.Schema({
-    id: { type: String, required: true, unique: true },
-    responsavelCotacao: { type: String, required: true },
-    transportadora: { type: String, required: true },
-    destino: String,
-    numeroCotacao: String,
-    valorFrete: { type: Number, required: true },
-    vendedor: String,
-    numeroDocumento: String,
-    previsaoEntrega: String,
-    canalComunicacao: String,
-    codigoColeta: String,
-    responsavelTransportadora: String,
-    dataCotacao: { type: String, required: true },
-    observacoes: String,
-    negocioFechado: { type: Boolean, default: false },
-    timestamp: { type: Date, default: Date.now },
-    updatedAt: Date
-}, {
-    timestamps: true
-});
-
-const Cotacao = mongoose.model('Cotacao', cotacaoSchema);
-
-// ==========================================
 // ROTAS PÚBLICAS
 // ==========================================
 
@@ -73,6 +39,7 @@ app.get('/', (req, res) => {
         message: '🚀 API de Cotações de Frete',
         version: '1.0.0',
         status: 'online',
+        database: 'Supabase',
         endpoints: {
             health: 'GET /health',
             cotacoes: {
@@ -84,19 +51,28 @@ app.get('/', (req, res) => {
             }
         },
         authentication: 'Bearer Token required for /api/* routes',
-        database: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
         timestamp: new Date().toISOString()
     });
 });
 
 // Health check
-app.get('/health', (req, res) => {
-    const status = mongoose.connection.readyState === 1 ? 'healthy' : 'unhealthy';
-    res.json({ 
-        status,
-        database: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
-        timestamp: new Date().toISOString()
-    });
+app.get('/health', async (req, res) => {
+    try {
+        // Testa conexão com Supabase
+        const { error } = await supabase.from('cotacoes').select('count', { count: 'exact', head: true });
+        
+        res.json({ 
+            status: error ? 'unhealthy' : 'healthy',
+            database: error ? 'disconnected' : 'connected',
+            timestamp: new Date().toISOString()
+        });
+    } catch (error) {
+        res.json({ 
+            status: 'unhealthy',
+            database: 'error',
+            timestamp: new Date().toISOString()
+        });
+    }
 });
 
 // HEAD - Verificar status
@@ -116,8 +92,14 @@ app.use('/api/cotacoes', verificarAutenticacao);
 // GET - Listar todas as cotações
 app.get('/api/cotacoes', async (req, res) => {
     try {
-        const cotacoes = await Cotacao.find().sort({ timestamp: -1 });
-        res.json(cotacoes);
+        const { data, error } = await supabase
+            .from('cotacoes')
+            .select('*')
+            .order('timestamp', { ascending: false });
+
+        if (error) throw error;
+
+        res.json(data || []);
     } catch (error) {
         console.error('Erro ao buscar cotações:', error);
         res.status(500).json({ error: 'Erro ao buscar cotações' });
@@ -127,13 +109,20 @@ app.get('/api/cotacoes', async (req, res) => {
 // GET - Buscar cotação específica
 app.get('/api/cotacoes/:id', async (req, res) => {
     try {
-        const cotacao = await Cotacao.findOne({ id: req.params.id });
-        
-        if (!cotacao) {
-            return res.status(404).json({ error: 'Cotação não encontrada' });
+        const { data, error } = await supabase
+            .from('cotacoes')
+            .select('*')
+            .eq('id', req.params.id)
+            .single();
+
+        if (error) {
+            if (error.code === 'PGRST116') {
+                return res.status(404).json({ error: 'Cotação não encontrada' });
+            }
+            throw error;
         }
-        
-        res.json(cotacao);
+
+        res.json(data);
     } catch (error) {
         console.error('Erro ao buscar cotação:', error);
         res.status(500).json({ error: 'Erro ao buscar cotação' });
@@ -143,17 +132,23 @@ app.get('/api/cotacoes/:id', async (req, res) => {
 // POST - Criar nova cotação
 app.post('/api/cotacoes', async (req, res) => {
     try {
-        const novaCotacao = new Cotacao({
+        const novaCotacao = {
             ...req.body,
             id: Date.now().toString(),
-            timestamp: new Date(),
+            timestamp: new Date().toISOString(),
             negocioFechado: req.body.negocioFechado || false
-        });
-        
-        await novaCotacao.save();
-        
-        console.log(`✅ Nova cotação criada: ${novaCotacao.id}`);
-        res.status(201).json(novaCotacao);
+        };
+
+        const { data, error } = await supabase
+            .from('cotacoes')
+            .insert([novaCotacao])
+            .select()
+            .single();
+
+        if (error) throw error;
+
+        console.log(`✅ Nova cotação criada: ${data.id}`);
+        res.status(201).json(data);
     } catch (error) {
         console.error('Erro ao criar cotação:', error);
         res.status(500).json({ error: 'Erro ao criar cotação' });
@@ -163,24 +158,25 @@ app.post('/api/cotacoes', async (req, res) => {
 // PUT - Atualizar cotação
 app.put('/api/cotacoes/:id', async (req, res) => {
     try {
-        const cotacaoAtualizada = await Cotacao.findOneAndUpdate(
-            { id: req.params.id },
-            { 
+        const { data, error } = await supabase
+            .from('cotacoes')
+            .update({
                 ...req.body,
-                updatedAt: new Date()
-            },
-            { 
-                new: true,
-                runValidators: true
+                updatedAt: new Date().toISOString()
+            })
+            .eq('id', req.params.id)
+            .select()
+            .single();
+
+        if (error) {
+            if (error.code === 'PGRST116') {
+                return res.status(404).json({ error: 'Cotação não encontrada' });
             }
-        );
-        
-        if (!cotacaoAtualizada) {
-            return res.status(404).json({ error: 'Cotação não encontrada' });
+            throw error;
         }
-        
+
         console.log(`✅ Cotação atualizada: ${req.params.id}`);
-        res.json(cotacaoAtualizada);
+        res.json(data);
     } catch (error) {
         console.error('Erro ao atualizar cotação:', error);
         res.status(500).json({ error: 'Erro ao atualizar cotação' });
@@ -190,12 +186,13 @@ app.put('/api/cotacoes/:id', async (req, res) => {
 // DELETE - Excluir cotação
 app.delete('/api/cotacoes/:id', async (req, res) => {
     try {
-        const cotacaoDeletada = await Cotacao.findOneAndDelete({ id: req.params.id });
-        
-        if (!cotacaoDeletada) {
-            return res.status(404).json({ error: 'Cotação não encontrada' });
-        }
-        
+        const { error } = await supabase
+            .from('cotacoes')
+            .delete()
+            .eq('id', req.params.id);
+
+        if (error) throw error;
+
         console.log(`✅ Cotação deletada: ${req.params.id}`);
         res.status(204).end();
     } catch (error) {
@@ -220,6 +217,6 @@ app.use((req, res) => {
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, '0.0.0.0', () => {
     console.log(`🚀 Servidor rodando na porta ${PORT}`);
-    console.log(`📊 MongoDB: ${mongoose.connection.readyState === 1 ? 'Conectado' : 'Aguardando conexão...'}`);
+    console.log(`📊 Banco de dados: Supabase`);
     console.log(`🔐 Autenticação: ${process.env.API_TOKEN ? 'Ativada' : '❌ TOKEN NÃO CONFIGURADO'}`);
 });
