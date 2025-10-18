@@ -1,44 +1,80 @@
+require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
-const fs = require('fs').promises;
-const path = require('path');
+const mongoose = require('mongoose');
+const { verificarAutenticacao } = require('./middleware/auth');
 
 const app = express();
-const DATA_FILE = path.join(__dirname, 'cotacoes.json');
 
-// Middlewares
-app.use(cors());
+// ==========================================
+// MIDDLEWARES
+// ==========================================
+app.use(cors({
+    origin: '*', // Em produção, especifique seu domínio
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'HEAD'],
+    allowedHeaders: ['Content-Type', 'Authorization']
+}));
 app.use(express.json());
 
-// Função para ler dados do arquivo
-async function readData() {
-    try {
-        const data = await fs.readFile(DATA_FILE, 'utf8');
-        return JSON.parse(data);
-    } catch (error) {
-        if (error.code === 'ENOENT') {
-            // Se o arquivo não existir, cria um array vazio
-            await writeData([]);
-            return [];
-        }
-        throw error;
-    }
+// ==========================================
+// CONEXÃO COM MONGODB
+// ==========================================
+const MONGODB_URI = process.env.MONGODB_URI;
+
+if (!MONGODB_URI) {
+    console.error('❌ ERRO: MONGODB_URI não configurado no .env');
+    process.exit(1);
 }
 
-// Função para escrever dados no arquivo
-async function writeData(data) {
-    await fs.writeFile(DATA_FILE, JSON.stringify(data, null, 2), 'utf8');
-}
+mongoose.connect(MONGODB_URI, {
+    useNewUrlParser: true,
+    useUnifiedTopology: true,
+})
+.then(() => console.log('✅ Conectado ao MongoDB Atlas'))
+.catch(err => {
+    console.error('❌ Erro ao conectar MongoDB:', err);
+    process.exit(1);
+});
 
-// GET - Listar todas as cotações
-app.get('/cotacoes', async (req, res) => {
-    try {
-        const cotacoes = await readData();
-        res.json(cotacoes);
-    } catch (error) {
-        console.error('Erro ao ler cotações:', error);
-        res.status(500).json({ error: 'Erro ao ler cotações' });
-    }
+// ==========================================
+// MODELO DE DADOS (Schema)
+// ==========================================
+const cotacaoSchema = new mongoose.Schema({
+    id: { type: String, required: true, unique: true },
+    responsavelCotacao: { type: String, required: true },
+    transportadora: { type: String, required: true },
+    destino: String,
+    numeroCotacao: String,
+    valorFrete: { type: Number, required: true },
+    vendedor: String,
+    numeroDocumento: String,
+    previsaoEntrega: String,
+    canalComunicacao: String,
+    codigoColeta: String,
+    responsavelTransportadora: String,
+    dataCotacao: { type: String, required: true },
+    observacoes: String,
+    negocioFechado: { type: Boolean, default: false },
+    timestamp: { type: Date, default: Date.now },
+    updatedAt: Date
+}, {
+    timestamps: true
+});
+
+const Cotacao = mongoose.model('Cotacao', cotacaoSchema);
+
+// ==========================================
+// ROTAS PÚBLICAS (sem autenticação)
+// ==========================================
+
+// Health check
+app.get('/health', (req, res) => {
+    const status = mongoose.connection.readyState === 1 ? 'healthy' : 'unhealthy';
+    res.json({ 
+        status,
+        database: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
+        timestamp: new Date().toISOString()
+    });
 });
 
 // HEAD - Verificar status do servidor
@@ -46,20 +82,55 @@ app.head('/cotacoes', (req, res) => {
     res.status(200).end();
 });
 
+// ==========================================
+// APLICAR AUTENTICAÇÃO EM TODAS AS ROTAS DE COTAÇÕES
+// ==========================================
+app.use('/cotacoes', verificarAutenticacao);
+
+// ==========================================
+// ROTAS PROTEGIDAS (requerem autenticação)
+// ==========================================
+
+// GET - Listar todas as cotações
+app.get('/cotacoes', async (req, res) => {
+    try {
+        const cotacoes = await Cotacao.find().sort({ timestamp: -1 });
+        res.json(cotacoes);
+    } catch (error) {
+        console.error('Erro ao buscar cotações:', error);
+        res.status(500).json({ error: 'Erro ao buscar cotações' });
+    }
+});
+
+// GET - Buscar uma cotação específica
+app.get('/cotacoes/:id', async (req, res) => {
+    try {
+        const cotacao = await Cotacao.findOne({ id: req.params.id });
+        
+        if (!cotacao) {
+            return res.status(404).json({ error: 'Cotação não encontrada' });
+        }
+        
+        res.json(cotacao);
+    } catch (error) {
+        console.error('Erro ao buscar cotação:', error);
+        res.status(500).json({ error: 'Erro ao buscar cotação' });
+    }
+});
+
 // POST - Criar nova cotação
 app.post('/cotacoes', async (req, res) => {
     try {
-        const cotacoes = await readData();
-        const novaCotacao = {
+        const novaCotacao = new Cotacao({
             ...req.body,
             id: Date.now().toString(),
-            timestamp: new Date().toISOString(),
+            timestamp: new Date(),
             negocioFechado: req.body.negocioFechado || false
-        };
+        });
         
-        cotacoes.unshift(novaCotacao);
-        await writeData(cotacoes);
+        await novaCotacao.save();
         
+        console.log(`✅ Nova cotação criada: ${novaCotacao.id}`);
         res.status(201).json(novaCotacao);
     } catch (error) {
         console.error('Erro ao criar cotação:', error);
@@ -70,22 +141,24 @@ app.post('/cotacoes', async (req, res) => {
 // PUT - Atualizar cotação existente
 app.put('/cotacoes/:id', async (req, res) => {
     try {
-        const cotacoes = await readData();
-        const index = cotacoes.findIndex(c => c.id === req.params.id);
+        const cotacaoAtualizada = await Cotacao.findOneAndUpdate(
+            { id: req.params.id },
+            { 
+                ...req.body,
+                updatedAt: new Date()
+            },
+            { 
+                new: true,
+                runValidators: true
+            }
+        );
         
-        if (index === -1) {
+        if (!cotacaoAtualizada) {
             return res.status(404).json({ error: 'Cotação não encontrada' });
         }
         
-        cotacoes[index] = {
-            ...req.body,
-            id: req.params.id,
-            timestamp: cotacoes[index].timestamp,
-            updatedAt: new Date().toISOString()
-        };
-        
-        await writeData(cotacoes);
-        res.json(cotacoes[index]);
+        console.log(`✅ Cotação atualizada: ${req.params.id}`);
+        res.json(cotacaoAtualizada);
     } catch (error) {
         console.error('Erro ao atualizar cotação:', error);
         res.status(500).json({ error: 'Erro ao atualizar cotação' });
@@ -95,14 +168,13 @@ app.put('/cotacoes/:id', async (req, res) => {
 // DELETE - Excluir cotação
 app.delete('/cotacoes/:id', async (req, res) => {
     try {
-        const cotacoes = await readData();
-        const filteredCotacoes = cotacoes.filter(c => c.id !== req.params.id);
+        const cotacaoDeletada = await Cotacao.findOneAndDelete({ id: req.params.id });
         
-        if (cotacoes.length === filteredCotacoes.length) {
+        if (!cotacaoDeletada) {
             return res.status(404).json({ error: 'Cotação não encontrada' });
         }
         
-        await writeData(filteredCotacoes);
+        console.log(`✅ Cotação deletada: ${req.params.id}`);
         res.status(204).end();
     } catch (error) {
         console.error('Erro ao excluir cotação:', error);
@@ -110,18 +182,22 @@ app.delete('/cotacoes/:id', async (req, res) => {
     }
 });
 
-// No seu server.js (backend)
-app.use((req, res, next) => {
-    res.header('Access-Control-Allow-Origin', '*');
-    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE');
-    res.header('Access-Control-Allow-Headers', 'Content-Type');
-    next();
+// ==========================================
+// TRATAMENTO DE ROTAS NÃO ENCONTRADAS
+// ==========================================
+app.use((req, res) => {
+    res.status(404).json({ 
+        error: 'Rota não encontrada',
+        message: `A rota ${req.method} ${req.path} não existe`
+    });
 });
 
+// ==========================================
+// INICIAR SERVIDOR
+// ==========================================
 const PORT = process.env.PORT || 3001;
-
 app.listen(PORT, () => {
-  console.log(`Servidor rodando na porta ${PORT}`);
+    console.log(`🚀 Servidor rodando na porta ${PORT}`);
+    console.log(`📊 MongoDB: ${mongoose.connection.readyState === 1 ? 'Conectado' : 'Aguardando conexão...'}`);
+    console.log(`🔒 Autenticação: ${process.env.API_TOKEN ? 'Ativada' : '❌ TOKEN NÃO CONFIGURADO'}`);
 });
-
-
