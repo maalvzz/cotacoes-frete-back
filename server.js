@@ -104,7 +104,8 @@ app.get('/api/cotacoes', async (req, res) => {
         // 1. Tentar buscar do cache
         const cachedData = await getCache(cacheKey);
         if (cachedData) {
-            return res.json(JSON.parse(cachedData));
+            // Redis já retorna objeto parseado
+            return res.json(cachedData);
         }
         
         // 2. Se não tiver cache, buscar do Supabase
