@@ -10,7 +10,7 @@ const app = express();
 // MIDDLEWARES
 // ==========================================
 app.use(cors({
-    origin: '*', // Em produção, especifique seu domínio
+    origin: '*',
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'HEAD'],
     allowedHeaders: ['Content-Type', 'Authorization']
 }));
@@ -37,7 +37,7 @@ mongoose.connect(MONGODB_URI, {
 });
 
 // ==========================================
-// MODELO DE DADOS (Schema)
+// MODELO DE DADOS
 // ==========================================
 const cotacaoSchema = new mongoose.Schema({
     id: { type: String, required: true, unique: true },
@@ -64,7 +64,7 @@ const cotacaoSchema = new mongoose.Schema({
 const Cotacao = mongoose.model('Cotacao', cotacaoSchema);
 
 // ==========================================
-// ROTAS PÚBLICAS (sem autenticação)
+// ROTAS PÚBLICAS
 // ==========================================
 
 // Health check
@@ -77,22 +77,22 @@ app.get('/health', (req, res) => {
     });
 });
 
-// HEAD - Verificar status do servidor
-app.head('/cotacoes', (req, res) => {
+// HEAD - Verificar status
+app.head('/api/cotacoes', (req, res) => {
     res.status(200).end();
 });
 
 // ==========================================
-// APLICAR AUTENTICAÇÃO EM TODAS AS ROTAS DE COTAÇÕES
+// APLICAR AUTENTICAÇÃO NAS ROTAS /api/cotacoes
 // ==========================================
-app.use('/cotacoes', verificarAutenticacao);
+app.use('/api/cotacoes', verificarAutenticacao);
 
 // ==========================================
-// ROTAS PROTEGIDAS (requerem autenticação)
+// ROTAS PROTEGIDAS (COM /api/)
 // ==========================================
 
 // GET - Listar todas as cotações
-app.get('/cotacoes', async (req, res) => {
+app.get('/api/cotacoes', async (req, res) => {
     try {
         const cotacoes = await Cotacao.find().sort({ timestamp: -1 });
         res.json(cotacoes);
@@ -102,8 +102,8 @@ app.get('/cotacoes', async (req, res) => {
     }
 });
 
-// GET - Buscar uma cotação específica
-app.get('/cotacoes/:id', async (req, res) => {
+// GET - Buscar cotação específica
+app.get('/api/cotacoes/:id', async (req, res) => {
     try {
         const cotacao = await Cotacao.findOne({ id: req.params.id });
         
@@ -119,7 +119,7 @@ app.get('/cotacoes/:id', async (req, res) => {
 });
 
 // POST - Criar nova cotação
-app.post('/cotacoes', async (req, res) => {
+app.post('/api/cotacoes', async (req, res) => {
     try {
         const novaCotacao = new Cotacao({
             ...req.body,
@@ -138,8 +138,8 @@ app.post('/cotacoes', async (req, res) => {
     }
 });
 
-// PUT - Atualizar cotação existente
-app.put('/cotacoes/:id', async (req, res) => {
+// PUT - Atualizar cotação
+app.put('/api/cotacoes/:id', async (req, res) => {
     try {
         const cotacaoAtualizada = await Cotacao.findOneAndUpdate(
             { id: req.params.id },
@@ -166,7 +166,7 @@ app.put('/cotacoes/:id', async (req, res) => {
 });
 
 // DELETE - Excluir cotação
-app.delete('/cotacoes/:id', async (req, res) => {
+app.delete('/api/cotacoes/:id', async (req, res) => {
     try {
         const cotacaoDeletada = await Cotacao.findOneAndDelete({ id: req.params.id });
         
@@ -196,8 +196,8 @@ app.use((req, res) => {
 // INICIAR SERVIDOR
 // ==========================================
 const PORT = process.env.PORT || 3001;
-app.listen(PORT, () => {
+app.listen(PORT, '0.0.0.0', () => {
     console.log(`🚀 Servidor rodando na porta ${PORT}`);
     console.log(`📊 MongoDB: ${mongoose.connection.readyState === 1 ? 'Conectado' : 'Aguardando conexão...'}`);
-    console.log(`🔒 Autenticação: ${process.env.API_TOKEN ? 'Ativada' : '❌ TOKEN NÃO CONFIGURADO'}`);
+    console.log(`🔐 Autenticação: ${process.env.API_TOKEN ? 'Ativada' : '❌ TOKEN NÃO CONFIGURADO'}`);
 });
