@@ -53,7 +53,8 @@ async function setCache(key, data, ttl = 300) {
     if (!redis) return false;
     
     try {
-        await redis.set(key, JSON.stringify(data), { ex: ttl });
+        // Redis do Upstash já serializa automaticamente
+        await redis.set(key, data, { ex: ttl });
         console.log(`💾 Cache SALVO: ${key} (expira em ${ttl}s)`);
         return true;
     } catch (error) {
