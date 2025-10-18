@@ -7,11 +7,7 @@
     "start": "node server.js",
     "dev": "nodemon server.js"
   },
-  "keywords": [
-    "cotacoes",
-    "frete",
-    "transportadora"
-  ],
+  "keywords": ["cotacoes", "frete", "transportadora"],
   "author": "",
   "license": "MIT",
   "dependencies": {
