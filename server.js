@@ -4,7 +4,6 @@ const fs = require('fs').promises;
 const path = require('path');
 
 const app = express();
-const PORT = 3001;
 const DATA_FILE = path.join(__dirname, 'cotacoes.json');
 
 // Middlewares
@@ -116,3 +115,4 @@ const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
   console.log(`Servidor rodando na porta ${PORT}`);
 });
+
