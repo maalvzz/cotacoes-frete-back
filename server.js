@@ -3,6 +3,7 @@ const express = require('express');
 const cors = require('cors');
 const { createClient } = require('@supabase/supabase-js');
 const { verificarAutenticacao } = require('./middleware/auth');
+const { getCache, setCache, clearCache, healthCheck } = require('./cache');
 
 const app = express();
 
@@ -37,9 +38,10 @@ app.use(express.json());
 app.get('/', (req, res) => {
     res.json({
         message: '🚀 API de Cotações de Frete',
-        version: '1.0.0',
+        version: '2.0.0',
         status: 'online',
         database: 'Supabase',
+        cache: 'Redis (Upstash)',
         endpoints: {
             health: 'GET /health',
             cotacoes: {
@@ -55,21 +57,26 @@ app.get('/', (req, res) => {
     });
 });
 
-// Health check
+// Health check (com verificação de cache)
 app.get('/health', async (req, res) => {
     try {
         // Testa conexão com Supabase
         const { error } = await supabase.from('cotacoes').select('count', { count: 'exact', head: true });
         
+        // Testa conexão com Redis
+        const redisHealth = await healthCheck();
+        
         res.json({ 
             status: error ? 'unhealthy' : 'healthy',
             database: error ? 'disconnected' : 'connected',
+            cache: redisHealth ? 'connected' : 'disconnected',
             timestamp: new Date().toISOString()
         });
     } catch (error) {
         res.json({ 
             status: 'unhealthy',
             database: 'error',
+            cache: 'error',
             timestamp: new Date().toISOString()
         });
     }
@@ -86,18 +93,30 @@ app.head('/api/cotacoes', (req, res) => {
 app.use('/api/cotacoes', verificarAutenticacao);
 
 // ==========================================
-// ROTAS PROTEGIDAS (COM /api/)
+// ROTAS PROTEGIDAS (COM CACHE)
 // ==========================================
 
-// GET - Listar todas as cotações
+// GET - Listar todas as cotações (COM CACHE)
 app.get('/api/cotacoes', async (req, res) => {
     try {
+        const cacheKey = 'cotacoes:all';
+        
+        // 1. Tentar buscar do cache
+        const cachedData = await getCache(cacheKey);
+        if (cachedData) {
+            return res.json(JSON.parse(cachedData));
+        }
+        
+        // 2. Se não tiver cache, buscar do Supabase
         const { data, error } = await supabase
             .from('cotacoes')
             .select('*')
             .order('timestamp', { ascending: false });
 
         if (error) throw error;
+
+        // 3. Salvar no cache (expira em 5 minutos)
+        await setCache(cacheKey, data, 300);
 
         res.json(data || []);
     } catch (error) {
@@ -106,9 +125,18 @@ app.get('/api/cotacoes', async (req, res) => {
     }
 });
 
-// GET - Buscar cotação específica
+// GET - Buscar cotação específica (COM CACHE)
 app.get('/api/cotacoes/:id', async (req, res) => {
     try {
+        const cacheKey = `cotacoes:${req.params.id}`;
+        
+        // 1. Tentar buscar do cache
+        const cachedData = await getCache(cacheKey);
+        if (cachedData) {
+            return res.json(JSON.parse(cachedData));
+        }
+        
+        // 2. Se não tiver cache, buscar do Supabase
         const { data, error } = await supabase
             .from('cotacoes')
             .select('*')
@@ -122,6 +150,9 @@ app.get('/api/cotacoes/:id', async (req, res) => {
             throw error;
         }
 
+        // 3. Salvar no cache
+        await setCache(cacheKey, data, 300);
+
         res.json(data);
     } catch (error) {
         console.error('Erro ao buscar cotação:', error);
@@ -129,7 +160,7 @@ app.get('/api/cotacoes/:id', async (req, res) => {
     }
 });
 
-// POST - Criar nova cotação
+// POST - Criar nova cotação (LIMPA CACHE)
 app.post('/api/cotacoes', async (req, res) => {
     try {
         const novaCotacao = {
@@ -147,6 +178,9 @@ app.post('/api/cotacoes', async (req, res) => {
 
         if (error) throw error;
 
+        // Limpar cache para forçar atualização
+        await clearCache('cotacoes:*');
+
         console.log(`✅ Nova cotação criada: ${data.id}`);
         res.status(201).json(data);
     } catch (error) {
@@ -155,7 +189,7 @@ app.post('/api/cotacoes', async (req, res) => {
     }
 });
 
-// PUT - Atualizar cotação
+// PUT - Atualizar cotação (LIMPA CACHE)
 app.put('/api/cotacoes/:id', async (req, res) => {
     try {
         const { data, error } = await supabase
@@ -175,6 +209,9 @@ app.put('/api/cotacoes/:id', async (req, res) => {
             throw error;
         }
 
+        // Limpar cache para forçar atualização
+        await clearCache('cotacoes:*');
+
         console.log(`✅ Cotação atualizada: ${req.params.id}`);
         res.json(data);
     } catch (error) {
@@ -183,7 +220,7 @@ app.put('/api/cotacoes/:id', async (req, res) => {
     }
 });
 
-// DELETE - Excluir cotação
+// DELETE - Excluir cotação (LIMPA CACHE)
 app.delete('/api/cotacoes/:id', async (req, res) => {
     try {
         const { error } = await supabase
@@ -192,6 +229,9 @@ app.delete('/api/cotacoes/:id', async (req, res) => {
             .eq('id', req.params.id);
 
         if (error) throw error;
+
+        // Limpar cache para forçar atualização
+        await clearCache('cotacoes:*');
 
         console.log(`✅ Cotação deletada: ${req.params.id}`);
         res.status(204).end();
@@ -218,5 +258,6 @@ const PORT = process.env.PORT || 3001;
 app.listen(PORT, '0.0.0.0', () => {
     console.log(`🚀 Servidor rodando na porta ${PORT}`);
     console.log(`📊 Banco de dados: Supabase`);
-    console.log(`🔐 Autenticação: ${process.env.API_TOKEN ? 'Ativada' : '❌ TOKEN NÃO CONFIGURADO'}`);
+    console.log(`⚡ Cache: Redis (Upstash)`);
+    console.log(`🔒 Autenticação: ${process.env.API_TOKEN ? 'Ativada' : '❌ TOKEN NÃO CONFIGURADO'}`);
 });
