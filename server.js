@@ -1,8 +1,8 @@
-require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const session = require('express-session');
 const { createClient } = require('@supabase/supabase-js');
+require('dotenv').config();
 
 const app = express();
 
@@ -433,3 +433,4 @@ app.listen(PORT, '0.0.0.0', () => {
     console.log('🕐 Sessão dura: 8 horas');
     console.log('🚀 =================================');
 });
+
