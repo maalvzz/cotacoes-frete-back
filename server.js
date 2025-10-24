@@ -40,10 +40,10 @@ setInterval(() => {
 // MIDDLEWARES
 // ==========================================
 app.use(cors({
-    origin: true,
+    origin: '*', // Permite todas as origens
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'HEAD', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization']
+    allowedHeaders: ['Content-Type', 'Authorization', 'Accept']
 }));
 app.use(express.json());
 
